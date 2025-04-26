@@ -1,0 +1,30 @@
+{
+  "mcpServers": [
+    {
+      "name": "Code Review Server",
+      "url": "http://localhost:3000",
+      "capabilities": [
+        {
+          "name": "code_review",
+          "description": "커밋 전 코드 리뷰를 수행합니다",
+          "route": "/api/review",
+          "command": "Review Code",
+          "params": {
+            "file": {
+              "type": "string",
+              "description": "리뷰할 파일 경로"
+            },
+            "content": {
+              "type": "string",
+              "description": "파일 내용"
+            }
+          },
+          "output": {
+            "type": "object",
+            "description": "코드 리뷰 결과"
+          }
+        }
+      ]
+    }
+  ]
+}

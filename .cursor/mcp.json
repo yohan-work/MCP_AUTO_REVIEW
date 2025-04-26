@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "Code Review Server": {
+      "url": "http://localhost:3000",
+      "eventsUrl": "http://localhost:3000/sse",
+      "capabilities": [
+        {
+          "name": "code_review",
+          "description": "커밋 전 코드 리뷰를 수행합니다",
+          "route": "/api/review",
+          "httpMethod": "POST"
+        }
+      ]
+    }
+  }
+}
