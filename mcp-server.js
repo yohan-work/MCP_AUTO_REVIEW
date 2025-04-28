@@ -3,10 +3,19 @@
 const express = require("express");
 const cors = require("cors");
 const bodyParser = require("body-parser");
+const { Octokit } = require("octokit");
+const crypto = require("crypto");
+require('dotenv').config();
 
 // 서버 설정
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// GitHub API 설정
+const octokit = new Octokit({
+  auth: process.env.GITHUB_TOKEN
+});
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 
 // 미들웨어
 app.use(cors());
@@ -64,12 +73,265 @@ app.get("/", (req, res) => {
         description: "코드 리뷰를 수행합니다",
       },
       {
+        path: "/webhook/github",
+        method: "POST",
+        description: "GitHub 웹훅을 처리합니다",
+      },
+      {
         path: "/sse",
         method: "GET",
         description: "SSE 이벤트 스트림에 연결합니다",
       },
     ],
   });
+});
+
+// GitHub 웹훅 검증 함수
+function verifyWebhookSignature(req) {
+  if (!WEBHOOK_SECRET) {
+    console.warn("WEBHOOK_SECRET 환경 변수가 설정되지 않았습니다. 서명 검증을 건너뜁니다.");
+    return true;
+  }
+  
+  const signature = req.headers["x-hub-signature-256"];
+  if (!signature) {
+    return false;
+  }
+  
+  const payload = JSON.stringify(req.body);
+  const hmac = crypto.createHmac("sha256", WEBHOOK_SECRET);
+  const digest = "sha256=" + hmac.update(payload).digest("hex");
+  
+  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(digest));
+}
+
+// GitHub 웹훅 엔드포인트
+app.post("/webhook/github", async (req, res) => {
+  try {
+    // 웹훅 서명 검증
+    if (!verifyWebhookSignature(req)) {
+      console.error("GitHub 웹훅 서명이 유효하지 않습니다");
+      return res.status(401).json({
+        success: false,
+        message: "서명이 유효하지 않습니다",
+      });
+    }
+
+    const event = req.headers["x-github-event"];
+    
+    // Pull Request 이벤트 처리
+    if (event === "pull_request") {
+      // PR이 열리거나 수정되었을 때만 처리
+      const action = req.body.action;
+      if (action === "opened" || action === "synchronize") {
+        const pr = req.body.pull_request;
+        const repo = req.body.repository;
+        
+        console.log(`PR #${pr.number} 코드 리뷰 시작: ${repo.full_name}`);
+        
+        // SSE 이벤트로 PR 리뷰 시작 알림
+        sendSSEEvent("pr_review_started", { 
+          repo: repo.full_name,
+          pr: pr.number,
+          title: pr.title
+        });
+        
+        // PR 파일 변경 내용 가져오기
+        const prFiles = await octokit.rest.pulls.listFiles({
+          owner: repo.owner.login,
+          repo: repo.name,
+          pull_number: pr.number,
+        });
+        
+        // 각 파일 분석
+        let allIssues = [];
+        
+        for (const file of prFiles.data) {
+          // 파일 내용 가져오기
+          const fileContent = await octokit.rest.repos.getContent({
+            owner: repo.owner.login,
+            repo: repo.name,
+            path: file.filename,
+            ref: pr.head.sha,
+          });
+          
+          // Base64 디코딩
+          const content = Buffer.from(fileContent.data.content, 'base64').toString();
+          
+          // 코드 리뷰 수행
+          const issues = reviewCode(file.filename, content);
+          if (issues.length > 0) {
+            allIssues.push({
+              file: file.filename,
+              issues: issues,
+              feedback: generateFeedback(file.filename, issues)
+            });
+          }
+        }
+        
+        // 리뷰 결과를 PR에 코멘트로 추가
+        if (allIssues.length > 0) {
+          let commentBody = `## Cursor MCP 자동 코드 리뷰 결과\n\n`;
+          
+          allIssues.forEach(fileResult => {
+            commentBody += `### ${fileResult.file}\n\n`;
+            commentBody += fileResult.feedback + "\n\n";
+          });
+          
+          // PR에 코멘트 추가
+          await octokit.rest.issues.createComment({
+            owner: repo.owner.login,
+            repo: repo.name,
+            issue_number: pr.number,
+            body: commentBody,
+          });
+          
+          console.log(`PR #${pr.number}에 리뷰 코멘트를 추가했습니다.`);
+        } else {
+          // 문제 없음 코멘트
+          await octokit.rest.issues.createComment({
+            owner: repo.owner.login,
+            repo: repo.name,
+            issue_number: pr.number,
+            body: `## Cursor MCP 자동 코드 리뷰 결과\n\n🎉 코드 리뷰 통과! 문제가 발견되지 않았습니다.`,
+          });
+          
+          console.log(`PR #${pr.number}에 코드 리뷰 통과 코멘트를 추가했습니다.`);
+        }
+        
+        // SSE 이벤트로 PR 리뷰 완료 알림
+        sendSSEEvent("pr_review_completed", { 
+          repo: repo.full_name,
+          pr: pr.number,
+          issues_count: allIssues.reduce((sum, file) => sum + file.issues.length, 0)
+        });
+      }
+    }
+    
+    // Push 이벤트 처리 (커밋 전 검사)
+    else if (event === "push") {
+      const repo = req.body.repository;
+      const ref = req.body.ref;
+      const commits = req.body.commits;
+      
+      // master 또는 main 브랜치에 푸시된 경우
+      if (ref === "refs/heads/main" || ref === "refs/heads/master") {
+        console.log(`${repo.full_name} 리포지토리의 ${ref} 브랜치에 푸시 감지`);
+        
+        // SSE 이벤트로 푸시 감지 알림
+        sendSSEEvent("push_detected", {
+          repo: repo.full_name,
+          branch: ref,
+          commits_count: commits.length
+        });
+        
+        // 각 커밋의 변경된 파일 분석
+        let allCommitIssues = [];
+        
+        for (const commit of commits) {
+          const addedFiles = commit.added || [];
+          const modifiedFiles = commit.modified || [];
+          const allChanged = [...addedFiles, ...modifiedFiles];
+          
+          let commitIssues = {
+            commit: commit.id,
+            message: commit.message,
+            files: []
+          };
+          
+          // 변경된 각 파일에 대해 코드 리뷰 수행
+          for (const filepath of allChanged) {
+            try {
+              // 파일 내용 가져오기
+              const fileContent = await octokit.rest.repos.getContent({
+                owner: repo.owner.login,
+                repo: repo.name,
+                path: filepath,
+                ref: commit.id,
+              });
+              
+              // Base64 디코딩
+              const content = Buffer.from(fileContent.data.content, 'base64').toString();
+              
+              // 코드 리뷰 수행
+              const issues = reviewCode(filepath, content);
+              if (issues.length > 0) {
+                commitIssues.files.push({
+                  file: filepath,
+                  issues: issues,
+                  feedback: generateFeedback(filepath, issues)
+                });
+              }
+            } catch (error) {
+              console.error(`파일 ${filepath} 분석 중 오류:`, error);
+            }
+          }
+          
+          if (commitIssues.files.length > 0) {
+            allCommitIssues.push(commitIssues);
+          }
+        }
+        
+        // 문제가 발견된 경우 이슈 생성
+        if (allCommitIssues.length > 0) {
+          let issueBody = `## Cursor MCP 자동 코드 리뷰 - 푸시 감지\n\n`;
+          issueBody += `${ref} 브랜치에 푸시된 커밋에서 다음 문제가 발견되었습니다:\n\n`;
+          
+          allCommitIssues.forEach(commit => {
+            issueBody += `### 커밋: ${commit.id.substring(0, 7)} - ${commit.message}\n\n`;
+            
+            commit.files.forEach(file => {
+              issueBody += `#### ${file.file}\n\n`;
+              issueBody += file.feedback + "\n\n";
+            });
+          });
+          
+          // 이슈 생성
+          const issue = await octokit.rest.issues.create({
+            owner: repo.owner.login,
+            repo: repo.name,
+            title: `[MCP 자동 리뷰] ${ref} 브랜치 푸시에서 발견된 코드 문제`,
+            body: issueBody,
+            labels: ["automated-review", "code-quality"]
+          });
+          
+          console.log(`리포지토리 ${repo.full_name}에 이슈 #${issue.data.number}를 생성했습니다.`);
+          
+          // SSE 이벤트로 이슈 생성 알림
+          sendSSEEvent("issue_created", {
+            repo: repo.full_name,
+            issue: issue.data.number,
+            issues_count: allCommitIssues.reduce((sum, commit) => 
+              sum + commit.files.reduce((sum, file) => sum + file.issues.length, 0), 0)
+          });
+        } else {
+          console.log(`${repo.full_name} 리포지토리의 푸시에서 문제가 발견되지 않았습니다.`);
+          
+          // SSE 이벤트로 검사 완료 알림
+          sendSSEEvent("push_analyzed", {
+            repo: repo.full_name,
+            branch: ref,
+            status: "success"
+          });
+        }
+      }
+    }
+    
+    return res.status(200).json({ success: true });
+  } catch (error) {
+    console.error("GitHub 웹훅 처리 오류:", error);
+    
+    // SSE 이벤트로 오류 전송
+    sendSSEEvent("webhook_error", {
+      error: error.message
+    });
+    
+    return res.status(500).json({
+      success: false,
+      message: "웹훅 처리 중 오류가 발생했습니다",
+      error: error.message,
+    });
+  }
 });
 
 // MCP 코드 리뷰 엔드포인트
@@ -164,6 +426,24 @@ function reviewCode(file, content) {
         severity: "critical",
         line: findLineNumber(content, "addEventListener"),
       });
+    }
+    
+    // 미사용 변수 검사 (간단한 구현)
+    const varDeclarationRegex = /(?:const|let|var)\s+(\w+)\s*=/g;
+    let match;
+    while ((match = varDeclarationRegex.exec(content)) !== null) {
+      const varName = match[1];
+      // 선언 이후에 변수가 사용되는지 확인 (매우 기본적인 검사)
+      const useRegex = new RegExp(`[^a-zA-Z0-9_]${varName}[^a-zA-Z0-9_]`, 'g');
+      useRegex.lastIndex = match.index + match[0].length;
+      if (!useRegex.test(content)) {
+        issues.push({
+          type: "unused_variable",
+          message: `'${varName}' 변수가 선언되었지만 사용되지 않는 것 같습니다`,
+          severity: "warning",
+          line: findLineNumber(content.substring(0, match.index), "\n") + 1,
+        });
+      }
     }
   } else if (["py"].includes(fileExt)) {
     // Python 분석
@@ -281,5 +561,6 @@ app.listen(PORT, () => {
     `🚀 Cursor MCP 코드 리뷰 서버가 http://localhost:${PORT}에서 실행 중입니다`
   );
   console.log(`🔍 코드 리뷰 엔드포인트: http://localhost:${PORT}/api/review`);
+  console.log(`🔗 GitHub 웹훅 엔드포인트: http://localhost:${PORT}/webhook/github`);
   console.log(`📡 SSE 스트림: http://localhost:${PORT}/sse`);
 });
