@@ -278,7 +278,11 @@ app.post("/webhook/github", async (req, res) => {
           issueBody += `${ref} 브랜치에 푸시된 커밋에서 다음 문제가 발견되었습니다:\n\n`;
           
           allCommitIssues.forEach(commit => {
-            issueBody += `### 커밋: ${commit.id.substring(0, 7)} - ${commit.message}\n\n`;
+            // commit.id가 undefined인 경우를 방지
+            const commitId = commit.id ? commit.id.substring(0, 7) : 'unknown';
+            const commitMsg = commit.message || 'No message';
+            
+            issueBody += `### 커밋: ${commitId} - ${commitMsg}\n\n`;
             
             commit.files.forEach(file => {
               issueBody += `#### ${file.file}\n\n`;

@@ -1,10 +1,11 @@
-// MCP 자동 코드 리뷰 테스트용
+// MCP 자동 코드 리뷰 테스트용 - 코드 수정 버전
 
 // 전역 변수 (과도하게 사용)
 var globalCounter = 0;
 var globalData = [];
 let globalFlag = false;
 const GLOBAL_CONSTANT = "이 값은 절대 변경되지 않습니다";
+var evenMoreGlobals = {}; // 추가된 전역 변수
 
 // TODO: 이 함수를 리팩토링하고 성능 최적화 필요
 function initializeApplication() {
@@ -16,6 +17,9 @@ function initializeApplication() {
         logLevel: "verbose",
         timeout: 5000
     };
+    
+    // 더 많은 미사용 변수 추가
+    const anotherUnused = "이 문자열은 사용되지 않습니다";
     
     // 너무 긴 한 줄 (100자 초과)
     const veryLongString = "이것은 매우 긴 문자열로, 한 줄에 너무 많은 내용이 포함되어 있어 코드 가독성을 해칩니다. 줄 길이 제한을 초과하고 있어 좋지 않은 코드 스타일의 예입니다.";
@@ -40,15 +44,23 @@ function setupEventListeners() {
         validateInput(value);
     });
     
+    // 새로운 이벤트 리스너 추가 (제거 로직 없음)
+    window.addEventListener("resize", function() {
+        console.log("창 크기가 변경되었습니다!");
+    });
+    
     // 더 많은 리스너... 하지만 제거 로직 없음
 }
 
 // 너무 긴 함수 - 한 가지 일만 해야 하는 함수가 여러 가지 작업을 수행
 function processData() {
     console.log("데이터 처리 중...");
+    console.log("업데이트된 함수입니다");
     
     // 더 많은 콘솔 로그
     console.log("처리 단계 1");
+    console.log("처리 단계 2");
+    console.log("처리 단계 3");
     
     // 임의의 데이터 생성
     let data = [];
@@ -122,6 +134,8 @@ function processData() {
 function validateInput(input) {
     // TODO: 입력값 검증 로직 구현 필요
     console.log("입력값 검증 중:", input);
+    // TODO: 여기에 정규식 검증 추가 필요
+    // TODO: 보안 검증 추가 필요
     return true;
 }
 
@@ -168,9 +182,19 @@ function parseComplexData(input) {
                .replace(/^\+?([0-9]{1,3})?[-. ]?\(?([0-9]{3})\)?[-. ]?([0-9]{3})[-. ]?([0-9]{4})$/, 'PHONE_REMOVED');
 }
 
+// 새로 추가된 문제가 있는 함수
+function potentialBug(a, b) {
+    // 잠재적 버그: == 사용 (=== 사용해야 함)
+    if (a == b) {
+        return true;
+    }
+    return false;
+}
+
 // 메인 애플리케이션 초기화
 initializeApplication();
 console.log("애플리케이션이 준비되었습니다!");
+console.log("추가 로그 메시지");
 
 // 마지막 줄이 매우 길어서 가독성이 떨어지는 예
-const finalResult = processData() && validateInput("test") && console.log("모든 과정이 성공적으로 완료되었습니다!") && { status: "success", timestamp: new Date().toISOString(), counter: globalCounter, data: globalData.length > 0 ? globalData.slice(0, 10) : [], message: "이 줄은 의도적으로 매우 길게 작성되어 있어서 코드 리뷰에서 줄 길이 경고를 발생시킬 것입니다." }; 
+const finalResult = processData() && validateInput("test") && console.log("모든 과정이 성공적으로 완료되었습니다!") && { status: "success", timestamp: new Date().toISOString(), counter: globalCounter, data: globalData.length > 0 ? globalData.slice(0, 10) : [], message: "이 줄은 의도적으로 매우 길게 작성되어 있어서 코드 리뷰에서 줄 길이 경고를 발생시킬 것입니다. 수정 버전에서는 더 길게 만들었습니다." }; 
