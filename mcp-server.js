@@ -227,6 +227,10 @@ app.post("/webhook/github", async (req, res) => {
       // master 또는 main 브랜치에 푸시된 경우
       if (ref === "refs/heads/main" || ref === "refs/heads/master") {
         console.log(`${repo.full_name} 리포지토리의 ${ref} 브랜치에 푸시 감지`);
+        console.log(
+          `저장소 정보: owner=${repo.owner.login}, repo=${repo.name}`
+        );
+        console.log(`커밋 수: ${commits ? commits.length : 0}`);
 
         // SSE 이벤트로 푸시 감지 알림
         sendSSEEvent("push_detected", {
@@ -239,9 +243,11 @@ app.post("/webhook/github", async (req, res) => {
         let allCommitIssues = [];
 
         for (const commit of commits) {
+          console.log(`커밋 분석 중: ${commit.id} - ${commit.message}`);
           const addedFiles = commit.added || [];
           const modifiedFiles = commit.modified || [];
           const allChanged = [...addedFiles, ...modifiedFiles];
+          console.log(`변경된 파일: ${allChanged.length}개`);
 
           let commitIssues = {
             commit: commit.id,
@@ -252,6 +258,7 @@ app.post("/webhook/github", async (req, res) => {
           // 변경된 각 파일에 대해 코드 리뷰 수행
           for (const filepath of allChanged) {
             try {
+              console.log(`파일 분석 중: ${filepath}`);
               // 파일 내용 가져오기
               const fileContent = await octokit.rest.repos.getContent({
                 owner: repo.owner.login,
@@ -268,6 +275,10 @@ app.post("/webhook/github", async (req, res) => {
 
               // 코드 리뷰 수행
               const issues = reviewCode(filepath, content);
+              console.log(
+                `파일 ${filepath}에서 발견된 이슈: ${issues.length}개`
+              );
+
               if (issues.length > 0) {
                 commitIssues.files.push({
                   file: filepath,
@@ -284,6 +295,10 @@ app.post("/webhook/github", async (req, res) => {
             allCommitIssues.push(commitIssues);
           }
         }
+
+        console.log(
+          `모든 커밋에서 발견된 이슈가 있는 파일 수: ${allCommitIssues.length}`
+        );
 
         // 문제가 발견된 경우 이슈 생성
         if (allCommitIssues.length > 0) {
@@ -303,30 +318,48 @@ app.post("/webhook/github", async (req, res) => {
             });
           });
 
-          // 이슈 생성
-          const issue = await octokit.rest.issues.create({
-            owner: repo.owner.login,
-            repo: repo.name,
-            title: `[MCP 자동 리뷰] ${ref} 브랜치 푸시에서 발견된 코드 문제`,
-            body: issueBody,
-            labels: ["automated-review", "code-quality"],
-          });
-
+          console.log("이슈 생성 시도 중...");
+          console.log(`저장소: ${repo.full_name}`);
           console.log(
-            `리포지토리 ${repo.full_name}에 이슈 #${issue.data.number}를 생성했습니다.`
+            `토큰 존재 여부: ${process.env.GITHUB_TOKEN ? "있음" : "없음"}`
           );
 
-          // SSE 이벤트로 이슈 생성 알림
-          sendSSEEvent("issue_created", {
-            repo: repo.full_name,
-            issue: issue.data.number,
-            issues_count: allCommitIssues.reduce(
-              (sum, commit) =>
-                sum +
-                commit.files.reduce((sum, file) => sum + file.issues.length, 0),
-              0
-            ),
-          });
+          try {
+            // 이슈 생성
+            const issue = await octokit.rest.issues.create({
+              owner: repo.owner.login,
+              repo: repo.name,
+              title: `[MCP 자동 리뷰] ${ref} 브랜치 푸시에서 발견된 코드 문제`,
+              body: issueBody,
+              labels: ["automated-review", "code-quality"],
+            });
+
+            console.log(
+              `리포지토리 ${repo.full_name}에 이슈 #${issue.data.number}를 생성했습니다.`
+            );
+
+            // SSE 이벤트로 이슈 생성 알림
+            sendSSEEvent("issue_created", {
+              repo: repo.full_name,
+              issue: issue.data.number,
+              issues_count: allCommitIssues.reduce(
+                (sum, commit) =>
+                  sum +
+                  commit.files.reduce(
+                    (sum, file) => sum + file.issues.length,
+                    0
+                  ),
+                0
+              ),
+            });
+          } catch (error) {
+            console.error("이슈 생성 실패:", error);
+            console.error("에러 상태:", error.status);
+            console.error("에러 메시지:", error.message);
+            if (error.response) {
+              console.error("응답 데이터:", error.response.data);
+            }
+          }
         } else {
           console.log(
             `${repo.full_name} 리포지토리의 푸시에서 문제가 발견되지 않았습니다.`
