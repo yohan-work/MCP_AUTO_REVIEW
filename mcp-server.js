@@ -5,7 +5,7 @@ const cors = require("cors");
 const bodyParser = require("body-parser");
 const { Octokit } = require("octokit");
 const crypto = require("crypto");
-require('dotenv').config();
+require("dotenv").config();
 
 // 서버 설정
 const app = express();
@@ -13,7 +13,7 @@ const PORT = process.env.PORT || 3000;
 
 // GitHub API 설정
 const octokit = new Octokit({
-  auth: process.env.GITHUB_TOKEN
+  auth: process.env.GITHUB_TOKEN,
 });
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 
@@ -89,19 +89,21 @@ app.get("/", (req, res) => {
 // GitHub 웹훅 검증 함수
 function verifyWebhookSignature(req) {
   if (!WEBHOOK_SECRET) {
-    console.warn("WEBHOOK_SECRET 환경 변수가 설정되지 않았습니다. 서명 검증을 건너뜁니다.");
+    console.warn(
+      "WEBHOOK_SECRET 환경 변수가 설정되지 않았습니다. 서명 검증을 건너뜁니다."
+    );
     return true;
   }
-  
+
   const signature = req.headers["x-hub-signature-256"];
   if (!signature) {
     return false;
   }
-  
+
   const payload = JSON.stringify(req.body);
   const hmac = crypto.createHmac("sha256", WEBHOOK_SECRET);
   const digest = "sha256=" + hmac.update(payload).digest("hex");
-  
+
   return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(digest));
 }
 
@@ -118,7 +120,7 @@ app.post("/webhook/github", async (req, res) => {
     }
 
     const event = req.headers["x-github-event"];
-    
+
     // Pull Request 이벤트 처리
     if (event === "pull_request") {
       // PR이 열리거나 수정되었을 때만 처리
@@ -126,26 +128,26 @@ app.post("/webhook/github", async (req, res) => {
       if (action === "opened" || action === "synchronize") {
         const pr = req.body.pull_request;
         const repo = req.body.repository;
-        
+
         console.log(`PR #${pr.number} 코드 리뷰 시작: ${repo.full_name}`);
-        
+
         // SSE 이벤트로 PR 리뷰 시작 알림
-        sendSSEEvent("pr_review_started", { 
+        sendSSEEvent("pr_review_started", {
           repo: repo.full_name,
           pr: pr.number,
-          title: pr.title
+          title: pr.title,
         });
-        
+
         // PR 파일 변경 내용 가져오기
         const prFiles = await octokit.rest.pulls.listFiles({
           owner: repo.owner.login,
           repo: repo.name,
           pull_number: pr.number,
         });
-        
+
         // 각 파일 분석
         let allIssues = [];
-        
+
         for (const file of prFiles.data) {
           // 파일 내용 가져오기
           const fileContent = await octokit.rest.repos.getContent({
@@ -154,30 +156,33 @@ app.post("/webhook/github", async (req, res) => {
             path: file.filename,
             ref: pr.head.sha,
           });
-          
+
           // Base64 디코딩
-          const content = Buffer.from(fileContent.data.content, 'base64').toString();
-          
+          const content = Buffer.from(
+            fileContent.data.content,
+            "base64"
+          ).toString();
+
           // 코드 리뷰 수행
           const issues = reviewCode(file.filename, content);
           if (issues.length > 0) {
             allIssues.push({
               file: file.filename,
               issues: issues,
-              feedback: generateFeedback(file.filename, issues)
+              feedback: generateFeedback(file.filename, issues),
             });
           }
         }
-        
+
         // 리뷰 결과를 PR에 코멘트로 추가
         if (allIssues.length > 0) {
           let commentBody = `## Cursor MCP 자동 코드 리뷰 결과\n\n`;
-          
-          allIssues.forEach(fileResult => {
+
+          allIssues.forEach((fileResult) => {
             commentBody += `### ${fileResult.file}\n\n`;
             commentBody += fileResult.feedback + "\n\n";
           });
-          
+
           // PR에 코멘트 추가
           await octokit.rest.issues.createComment({
             owner: repo.owner.login,
@@ -185,7 +190,7 @@ app.post("/webhook/github", async (req, res) => {
             issue_number: pr.number,
             body: commentBody,
           });
-          
+
           console.log(`PR #${pr.number}에 리뷰 코멘트를 추가했습니다.`);
         } else {
           // 문제 없음 코멘트
@@ -195,50 +200,55 @@ app.post("/webhook/github", async (req, res) => {
             issue_number: pr.number,
             body: `## Cursor MCP 자동 코드 리뷰 결과\n\n🎉 코드 리뷰 통과! 문제가 발견되지 않았습니다.`,
           });
-          
-          console.log(`PR #${pr.number}에 코드 리뷰 통과 코멘트를 추가했습니다.`);
+
+          console.log(
+            `PR #${pr.number}에 코드 리뷰 통과 코멘트를 추가했습니다.`
+          );
         }
-        
+
         // SSE 이벤트로 PR 리뷰 완료 알림
-        sendSSEEvent("pr_review_completed", { 
+        sendSSEEvent("pr_review_completed", {
           repo: repo.full_name,
           pr: pr.number,
-          issues_count: allIssues.reduce((sum, file) => sum + file.issues.length, 0)
+          issues_count: allIssues.reduce(
+            (sum, file) => sum + file.issues.length,
+            0
+          ),
         });
       }
     }
-    
+
     // Push 이벤트 처리 (커밋 전 검사)
     else if (event === "push") {
       const repo = req.body.repository;
       const ref = req.body.ref;
       const commits = req.body.commits;
-      
+
       // master 또는 main 브랜치에 푸시된 경우
       if (ref === "refs/heads/main" || ref === "refs/heads/master") {
         console.log(`${repo.full_name} 리포지토리의 ${ref} 브랜치에 푸시 감지`);
-        
+
         // SSE 이벤트로 푸시 감지 알림
         sendSSEEvent("push_detected", {
           repo: repo.full_name,
           branch: ref,
-          commits_count: commits.length
+          commits_count: commits.length,
         });
-        
+
         // 각 커밋의 변경된 파일 분석
         let allCommitIssues = [];
-        
+
         for (const commit of commits) {
           const addedFiles = commit.added || [];
           const modifiedFiles = commit.modified || [];
           const allChanged = [...addedFiles, ...modifiedFiles];
-          
+
           let commitIssues = {
             commit: commit.id,
             message: commit.message,
-            files: []
+            files: [],
           };
-          
+
           // 변경된 각 파일에 대해 코드 리뷰 수행
           for (const filepath of allChanged) {
             try {
@@ -249,87 +259,98 @@ app.post("/webhook/github", async (req, res) => {
                 path: filepath,
                 ref: commit.id,
               });
-              
+
               // Base64 디코딩
-              const content = Buffer.from(fileContent.data.content, 'base64').toString();
-              
+              const content = Buffer.from(
+                fileContent.data.content,
+                "base64"
+              ).toString();
+
               // 코드 리뷰 수행
               const issues = reviewCode(filepath, content);
               if (issues.length > 0) {
                 commitIssues.files.push({
                   file: filepath,
                   issues: issues,
-                  feedback: generateFeedback(filepath, issues)
+                  feedback: generateFeedback(filepath, issues),
                 });
               }
             } catch (error) {
               console.error(`파일 ${filepath} 분석 중 오류:`, error);
             }
           }
-          
+
           if (commitIssues.files.length > 0) {
             allCommitIssues.push(commitIssues);
           }
         }
-        
+
         // 문제가 발견된 경우 이슈 생성
         if (allCommitIssues.length > 0) {
           let issueBody = `## Cursor MCP 자동 코드 리뷰 - 푸시 감지\n\n`;
           issueBody += `${ref} 브랜치에 푸시된 커밋에서 다음 문제가 발견되었습니다:\n\n`;
-          
-          allCommitIssues.forEach(commit => {
+
+          allCommitIssues.forEach((commit) => {
             // commit.id가 undefined인 경우를 방지
-            const commitId = commit.id ? commit.id.substring(0, 7) : 'unknown';
-            const commitMsg = commit.message || 'No message';
-            
+            const commitId = commit.id ? commit.id.substring(0, 7) : "unknown";
+            const commitMsg = commit.message || "No message";
+
             issueBody += `### 커밋: ${commitId} - ${commitMsg}\n\n`;
-            
-            commit.files.forEach(file => {
+
+            commit.files.forEach((file) => {
               issueBody += `#### ${file.file}\n\n`;
               issueBody += file.feedback + "\n\n";
             });
           });
-          
+
           // 이슈 생성
           const issue = await octokit.rest.issues.create({
             owner: repo.owner.login,
             repo: repo.name,
             title: `[MCP 자동 리뷰] ${ref} 브랜치 푸시에서 발견된 코드 문제`,
             body: issueBody,
-            labels: ["automated-review", "code-quality"]
+            labels: ["automated-review", "code-quality"],
           });
-          
-          console.log(`리포지토리 ${repo.full_name}에 이슈 #${issue.data.number}를 생성했습니다.`);
-          
+
+          console.log(
+            `리포지토리 ${repo.full_name}에 이슈 #${issue.data.number}를 생성했습니다.`
+          );
+
           // SSE 이벤트로 이슈 생성 알림
           sendSSEEvent("issue_created", {
             repo: repo.full_name,
             issue: issue.data.number,
-            issues_count: allCommitIssues.reduce((sum, commit) => 
-              sum + commit.files.reduce((sum, file) => sum + file.issues.length, 0), 0)
+            issues_count: allCommitIssues.reduce(
+              (sum, commit) =>
+                sum +
+                commit.files.reduce((sum, file) => sum + file.issues.length, 0),
+              0
+            ),
           });
         } else {
-          console.log(`${repo.full_name} 리포지토리의 푸시에서 문제가 발견되지 않았습니다.`);
-          
+          console.log(
+            `${repo.full_name} 리포지토리의 푸시에서 문제가 발견되지 않았습니다.`
+          );
+
           // SSE 이벤트로 검사 완료 알림
           sendSSEEvent("push_analyzed", {
             repo: repo.full_name,
             branch: ref,
-            status: "success"
+            status: "success",
           });
         }
       }
     }
-    
+
     return res.status(200).json({ success: true });
   } catch (error) {
     console.error("GitHub 웹훅 처리 오류:", error);
-    
+
     // SSE 이벤트로 오류 전송
     sendSSEEvent("webhook_error", {
-      error: error.message
+      error: error.message,
     });
-    
+
     return res.status(500).json({
       success: false,
       message: "웹훅 처리 중 오류가 발생했습니다",
@@ -431,14 +452,14 @@ function reviewCode(file, content) {
         line: findLineNumber(content, "addEventListener"),
       });
     }
-    
+
     // 미사용 변수 검사 (간단한 구현)
     const varDeclarationRegex = /(?:const|let|var)\s+(\w+)\s*=/g;
     let match;
     while ((match = varDeclarationRegex.exec(content)) !== null) {
       const varName = match[1];
       // 선언 이후에 변수가 사용되는지 확인 (매우 기본적인 검사)
-      const useRegex = new RegExp(`[^a-zA-Z0-9_]${varName}[^a-zA-Z0-9_]`, 'g');
+      const useRegex = new RegExp(`[^a-zA-Z0-9_]${varName}[^a-zA-Z0-9_]`, "g");
       useRegex.lastIndex = match.index + match[0].length;
       if (!useRegex.test(content)) {
         issues.push({
@@ -485,6 +506,178 @@ function reviewCode(file, content) {
       });
     }
   });
+
+  // === 고급 코드 리뷰 항목 추가 ===
+
+  // 불필요한 DOM 쿼리 감지
+  if (["js", "jsx", "ts", "tsx", "html"].includes(fileExt)) {
+    const documentQueryRegex = /document\.querySelector/g;
+    const documentQueryMatches = content.match(documentQueryRegex) || [];
+    if (documentQueryMatches.length > 5) {
+      issues.push({
+        type: "performance_dom_query",
+        message:
+          "document.querySelector가 과도하게 사용되고 있습니다. 결과를 변수에 저장하여 재사용하세요.",
+        severity: "warning",
+        line: findLineNumber(content, "document.querySelector"),
+      });
+    }
+  }
+
+  // eval() 사용 감지
+  if (content.includes("eval(")) {
+    issues.push({
+      type: "security_eval",
+      message:
+        "eval() 함수는 보안 취약점을 일으킬 수 있으므로 사용을 피하세요.",
+      severity: "critical",
+      line: findLineNumber(content, "eval("),
+    });
+  }
+
+  // innerHTML 사용 시 XSS 취약점 경고
+  if (
+    content.includes(".innerHTML =") &&
+    !content.includes("DOMPurify.sanitize")
+  ) {
+    issues.push({
+      type: "security_xss",
+      message:
+        "innerHTML 사용 시 XSS 공격에 취약할 수 있습니다. textContent를 사용하거나 DOMPurify로 내용을 검증하세요.",
+      severity: "critical",
+      line: findLineNumber(content, ".innerHTML ="),
+    });
+  }
+
+  // 타이머 관리 (메모리 누수 방지)
+  if (
+    (content.includes("setTimeout(") || content.includes("setInterval(")) &&
+    !content.includes("clearTimeout(") &&
+    !content.includes("clearInterval(")
+  ) {
+    issues.push({
+      type: "memory_leak_timer",
+      message:
+        "타이머 함수 사용 시 clearTimeout 또는 clearInterval을 호출하여 메모리 누수를 방지하세요.",
+      severity: "warning",
+      line: content.includes("setTimeout(")
+        ? findLineNumber(content, "setTimeout(")
+        : findLineNumber(content, "setInterval("),
+    });
+  }
+
+  // 깊은 중첩 조건문 감지
+  const nestedIfRegex = /if\s*\(.+?\)\s*\{\s*if\s*\(.+?\)\s*\{\s*if\s*\(.+?\)/g;
+  if (nestedIfRegex.test(content)) {
+    issues.push({
+      type: "code_quality_nested_conditions",
+      message:
+        "3단계 이상의 중첩 조건문이 감지되었습니다. 함수 추출이나 조기 반환을 통해 코드를 단순화하세요.",
+      severity: "suggestion",
+      line: findLineNumber(content, "if"),
+    });
+  }
+
+  // 함수 길이 검사
+  const functionRegex =
+    /function\s+\w+\s*\([^)]*\)\s*\{([^{}]*(\{[^{}]*\})*[^{}]*)*\}/g;
+  let functionMatch;
+  while ((functionMatch = functionRegex.exec(content)) !== null) {
+    const functionBody = functionMatch[0];
+    const functionLines = functionBody.split("\n").length;
+    if (functionLines > 50) {
+      issues.push({
+        type: "code_quality_function_length",
+        message: `함수가 ${functionLines}줄로 너무 깁니다. 50줄 미만으로 유지하고 작은 함수로 분리하세요.`,
+        severity: "suggestion",
+        line:
+          findLineNumber(content.substring(0, functionMatch.index), "\n") + 1,
+      });
+    }
+  }
+
+  // Magic Number 감지
+  const magicNumberRegex = /(?<![a-zA-Z0-9_])[0-9]+(?![a-zA-Z0-9_])/g;
+  const magicNumbers = content.match(magicNumberRegex) || [];
+  const uniqueMagicNumbers = [...new Set(magicNumbers)].filter(
+    (n) => parseInt(n) > 1 && parseInt(n) !== 100
+  );
+  if (uniqueMagicNumbers.length > 5) {
+    issues.push({
+      type: "code_quality_magic_numbers",
+      message:
+        "다수의 매직 넘버가 감지되었습니다. 상수를 정의하여 코드의 가독성을 높이세요.",
+      severity: "suggestion",
+      line: 1,
+    });
+  }
+
+  // Promise 오류 처리 누락 감지
+  if (content.includes(".then(") && !content.includes(".catch(")) {
+    issues.push({
+      type: "error_handling_promise",
+      message:
+        "Promise에 .catch() 처리기가 없습니다. 비동기 오류를 적절히 처리하세요.",
+      severity: "warning",
+      line: findLineNumber(content, ".then("),
+    });
+  }
+
+  // 중복 코드 블록 감지 (간단한 방식)
+  const lineHashes = {};
+  const duplicateLines = {};
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (line.length > 30 && !line.startsWith("//") && !line.startsWith("*")) {
+      if (lineHashes[line]) {
+        duplicateLines[line] = true;
+      } else {
+        lineHashes[line] = true;
+      }
+    }
+  }
+  if (Object.keys(duplicateLines).length > 3) {
+    issues.push({
+      type: "code_quality_duplication",
+      message:
+        "중복 코드 블록이 감지되었습니다. 함수나 상수로 추출하여 재사용성을 높이세요.",
+      severity: "warning",
+      line: 1,
+    });
+  }
+
+  // 접근성 코드 검사 (React 컴포넌트)
+  if (fileExt === "jsx" || fileExt === "tsx") {
+    // onClick 핸들러가 있는데 onKeyDown/onKeyPress가 없는 경우
+    const onClickRegex = /onClick\s*=\s*\{/g;
+    const onKeyRegex = /onKey(Down|Press|Up)\s*=\s*\{/g;
+    const onClickMatches = content.match(onClickRegex) || [];
+    const onKeyMatches = content.match(onKeyRegex) || [];
+
+    if (onClickMatches.length > onKeyMatches.length) {
+      issues.push({
+        type: "accessibility_keyboard",
+        message:
+          "onClick 이벤트에 대응하는 키보드 이벤트 핸들러(onKeyDown/onKeyPress)가 없습니다. 키보드 접근성을 보장하세요.",
+        severity: "warning",
+        line: findLineNumber(content, "onClick"),
+      });
+    }
+
+    // 이미지에 alt 속성 누락
+    if (
+      content.includes("<img ") &&
+      !content.match(/<img[^>]*alt\s*=\s*["'][^"']*["']/)
+    ) {
+      issues.push({
+        type: "accessibility_alt_text",
+        message:
+          "이미지에 alt 속성이 누락되었습니다. 스크린 리더 접근성을 위해 대체 텍스트를 제공하세요.",
+        severity: "warning",
+        line: findLineNumber(content, "<img "),
+      });
+    }
+  }
 
   return issues;
 }
@@ -565,6 +758,8 @@ app.listen(PORT, () => {
     `🚀 Cursor MCP 코드 리뷰 서버가 http://localhost:${PORT}에서 실행 중입니다`
   );
   console.log(`🔍 코드 리뷰 엔드포인트: http://localhost:${PORT}/api/review`);
-  console.log(`🔗 GitHub 웹훅 엔드포인트: http://localhost:${PORT}/webhook/github`);
+  console.log(
+    `🔗 GitHub 웹훅 엔드포인트: http://localhost:${PORT}/webhook/github`
+  );
   console.log(`📡 SSE 스트림: http://localhost:${PORT}/sse`);
 });
