@@ -1021,4 +1021,4 @@ async function checkDocsAccessibility(componentName) {
 
 main();
 
-//.env 누락발견. 다시 검사 진행
+//.env 누락발견. 다시 검사 진행 v2.
