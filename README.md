@@ -55,11 +55,18 @@ npm run dev
 npm start
 ```
 
+# ngrok(임시)
+
+```bash
+ngrok http 3000
+```
+
 ## GitHub 웹훅 설정
 
 1. GitHub 저장소에서 **Settings > Webhooks > Add webhook** 로 이동합니다.
 
 2. 다음 정보를 입력합니다:
+
    - **Payload URL**: `http://your-server-url/webhook/github`
    - **Content type**: `application/json`
    - **Secret**: `.env` 파일에 설정한 `WEBHOOK_SECRET` 값과 동일하게 입력
@@ -121,14 +128,12 @@ npm start
   - 파일 크기 검사
   - 메모리 누수 검사 (addEventListener/removeEventListener)
   - 미사용 변수 검사
-  
 - Python:
   - print 문 검사
-  
 - 모든 파일:
   - TODO 주석 검사
   - 긴 줄 검사 (100자 초과)
 
 ## 라이센스
 
-MIT 
+MIT
